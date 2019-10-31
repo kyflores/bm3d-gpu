@@ -1,10 +1,10 @@
+#include "hip/hip_runtime.h"
 #include "params.hpp"
 #include "indices.cuh"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
-#include <vector_types.h>
+#include <hip/hip_runtime.h>
+// #include <device_launch_parameters.h>
+#include <hip/hip_vector_types.h>
 
 
 // Nearest lower power of 2
@@ -68,7 +68,7 @@ Block-matching algorithm
 For each processed reference patch it finds maximaly N similar patches that pass the distance threshold and stores them to the g_stacks array. 
 It also returns the number of them for each reference patch in g_num_patches_in_stack.
 Used denoising parameters: n,k,N,T,p
-Division: Kernel handles gridDim.y lines starting with the line passed in argument. Each block handles warpSize reference patches in line. 
+Division: Kernel handles gridDim.y lines starting with the line passed in argument. Each block handles hipWarpSize reference patches in line. 
 Each thread process one reference patch. All the warps of a block process the same reference patches.
 */
 __global__
@@ -81,26 +81,26 @@ void block_matching(
 	const Params params,			//IN: Denoising parameters
 	const uint2 start_point)		//IN: Address of the top-left reference patch of a batch
 {
-	//One block is processing warpSize patches (because each warp is computing distance of same warpSize patches from different displaced patches)
-	int tid = threadIdx.x % warpSize;
-	int wid = threadIdx.x / warpSize;
-	int num_warps = blockDim.x/warpSize;
+	//One block is processing hipWarpSize patches (because each warp is computing distance of same hipWarpSize patches from different displaced patches)
+	int tid = threadIdx.x % hipWarpSize;
+	int wid = threadIdx.x / hipWarpSize;
+	int num_warps = blockDim.x/hipWarpSize;
 	
 	//p_block denotes reference rectangle on which current cuda block is computing
-	uint p_rectangle_width = ((warpSize-1) * params.p) + params.k;
-	uint p_rectangle_start = start_point.x + blockIdx.x * warpSize * params.p;
+	uint p_rectangle_width = ((hipWarpSize-1) * params.p) + params.k;
+	uint p_rectangle_start = start_point.x + blockIdx.x * hipWarpSize * params.p;
 
 	//Shared arrays
-	extern __shared__ uint s_data[];
+	HIP_DYNAMIC_SHARED( uint, s_data)
 	uint *s_diff = (uint*)&s_data; //SIZE: p_rectangle_width*num_warps
-	uint *s_stacks = (uint*)&s_data[p_rectangle_width*num_warps]; //SIZE: params.N*num_warps*warpSize
-	uchar *s_patches_in_stack = (uchar*)&s_data[num_warps*(p_rectangle_width + params.N*warpSize)]; //SIZE: num_warps*warpSize
-	uchar *s_image_p = (uchar*)&s_patches_in_stack[num_warps*warpSize]; //SIZE: p_rectangle_width*params.k
+	uint *s_stacks = (uint*)&s_data[p_rectangle_width*num_warps]; //SIZE: params.N*num_warps*hipWarpSize
+	uchar *s_patches_in_stack = (uchar*)&s_data[num_warps*(p_rectangle_width + params.N*hipWarpSize)]; //SIZE: num_warps*hipWarpSize
+	uchar *s_image_p = (uchar*)&s_patches_in_stack[num_warps*hipWarpSize]; //SIZE: p_rectangle_width*params.k
 
 	s_diff += idx2(0, wid, p_rectangle_width);
 
 	//Initialize s_patches_in_stack to zero
-	s_patches_in_stack[ idx2(tid, wid, warpSize) ] = 0;
+	s_patches_in_stack[ idx2(tid, wid, hipWarpSize) ] = 0;
 
 	int2 p; //Address of reference patch
 	int2 q; //Address of patch against which the difference is computed
@@ -161,7 +161,7 @@ void block_matching(
 			q.x = q_rectangle_start + inner_p_x;
 
 			//Compute distance for each column of reference patch
-			for(uint i = tid; i < p_rectangle_width && p_rectangle_start+i < image_dim.x && q_rectangle_start+i < image_dim.x; i+=warpSize)
+			for(uint i = tid; i < p_rectangle_width && p_rectangle_start+i < image_dim.x && q_rectangle_start+i < image_dim.x; i+=hipWarpSize)
 			{
 				uint dist = 0;
 				for(uint iy = 0; iy < params.k; ++iy)
@@ -190,8 +190,8 @@ void block_matching(
 				
 				//Add current patch to s_stacks
 				add_to_matched_image( 
-					&s_stacks[ params.N * idx2(tid, wid, warpSize) ],
-					&s_patches_in_stack[ idx2(tid, wid, warpSize) ],
+					&s_stacks[ params.N * idx2(tid, wid, hipWarpSize) ],
+					&s_patches_in_stack[ idx2(tid, wid, hipWarpSize) ],
 					diff,
 					params
 				);
@@ -201,8 +201,8 @@ void block_matching(
 	
 	__syncthreads();
 
-	uint batch_size = gridDim.x*warpSize;
-	uint block_address_x = blockIdx.x*warpSize+tid;
+	uint batch_size = gridDim.x*hipWarpSize;
+	uint block_address_x = blockIdx.x*hipWarpSize+tid;
 
 	if (wid > 0) return;
 	//Select N most similar patches for each reference patch from stacks in shared memory and save them to global memory
@@ -222,10 +222,10 @@ void block_matching(
 		//Finds patch with minimal value of remaining
 		for (int i = minIdx; i < num_warps; ++i)
 		{
-			count = (uint)s_patches_in_stack[ idx2(tid, i, warpSize) ];
+			count = (uint)s_patches_in_stack[ idx2(tid, i, hipWarpSize) ];
 			if (count == 0) continue;
 
-			uint newMinVal = s_stacks[ idx3(count-1,tid,i,params.N,warpSize) ];
+			uint newMinVal = s_stacks[ idx3(count-1,tid,i,params.N,hipWarpSize) ];
 			if (newMinVal < minVal)
 			{
 				minVal = newMinVal;
@@ -235,7 +235,7 @@ void block_matching(
 		if (minVal == 0xFFFFFFFF) break; //All stacks are empty
 		
 		//Remove patch from shared stack
-		s_patches_in_stack[ idx2(tid, minIdx, warpSize) ]--;
+		s_patches_in_stack[ idx2(tid, minIdx, hipWarpSize) ]--;
 	
 		//Adds patch to stack in global memory
 		g_stacks[idx3(j, block_address_x, blockIdx.y, params.N, batch_size)] = (ushort)(minVal & 0xFFFF);
@@ -258,7 +258,7 @@ extern "C" void run_block_matching(
 	const uint shared_memory_size
 	)
 {
-	block_matching<<<num_blocks, num_threads,shared_memory_size>>>(
+	hipLaunchKernelGGL(block_matching, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0, 
 		image,
 		stacks,
 		num_patches_in_stack,

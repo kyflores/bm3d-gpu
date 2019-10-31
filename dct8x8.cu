@@ -1,6 +1,7 @@
+#include "hip/hip_runtime.h"
 #include "indices.cuh"
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include "hip/hip_runtime.h"
+// #include "device_launch_parameters.h"
 /*
  * Based on dct8x8_kernel2.cu provided in CUDA samples form NVIDIA Corporation.
  *
@@ -235,7 +236,7 @@ extern "C" void run_DCT2D8x8(
 	const dim3 num_threads,
 	const dim3 num_blocks)
 {
-	DCT2D8x8<<<num_blocks, num_threads>>>(transformed_stacks, gathered_stacks, size);
+	hipLaunchKernelGGL(DCT2D8x8, dim3(num_blocks), dim3(num_threads), 0, 0, transformed_stacks, gathered_stacks, size);
 }
 
 extern "C" void run_IDCT2D8x8(
@@ -245,5 +246,5 @@ extern "C" void run_IDCT2D8x8(
 	const dim3 num_threads,
 	const dim3 num_blocks)
 {
-	IDCT2D8x8<<<num_blocks, num_threads>>>(gathered_stacks, transformed_stacks, size);
+	hipLaunchKernelGGL(IDCT2D8x8, dim3(num_blocks), dim3(num_threads), 0, 0, gathered_stacks, transformed_stacks, size);
 }

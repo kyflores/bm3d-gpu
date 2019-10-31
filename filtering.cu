@@ -1,9 +1,10 @@
+#include "hip/hip_runtime.h"
 #include "indices.cuh"
 #include "params.hpp"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime.h>
+// #include <device_launch_parameters.h>
 #include <stdio.h>
 
 #include<float.h>
@@ -14,7 +15,7 @@
 template<typename T>
 __device__ inline T warpReduceSum(T val) 
 {
-  for (int offset = warpSize/2; offset > 0; offset /= 2)
+  for (int offset = hipWarpSize/2; offset > 0; offset /= 2)
     val += __shfl_down(val,offset);
   return val;
 }
@@ -24,8 +25,8 @@ __device__ inline T warpReduceSum(T val)
 template<typename T>
 __inline__ __device__ float blockReduceSum(T* shared, T val, int tid, int tcount) 
 {
-  int lane = tid % warpSize;
-  int wid = tid / warpSize;
+  int lane = tid % hipWarpSize;
+  int wid = tid / hipWarpSize;
 
   val = warpReduceSum(val);     // Each warp performs partial reduction
 
@@ -34,7 +35,7 @@ __inline__ __device__ float blockReduceSum(T* shared, T val, int tid, int tcount
   __syncthreads();              // Wait for all partial reductions
 
   //read from shared memory only if that warp existed
-  val = (tid < tcount / warpSize) ? shared[lane] : 0;
+  val = (tid < tcount / hipWarpSize) ? shared[lane] : 0;
 
   if (wid==0) val = warpReduceSum(val); //Final reduce within first warp
 
@@ -163,7 +164,7 @@ void hard_treshold_block(
 	const uint sigma				//IN: noise variance
 )
 {
-	extern __shared__ float data[];  
+	HIP_DYNAMIC_SHARED( float, data)  
 
 	int paramN = params.N+1;
 	uint tcount = blockDim.x*blockDim.y;
@@ -311,7 +312,7 @@ void wiener_filtering(
 	const uint sigma								//IN: Noise variance
 )
 {
-	extern __shared__ float data[];
+	HIP_DYNAMIC_SHARED( float, data)
 
 	int paramN = params.N+1;
 	uint tcount = blockDim.x*blockDim.y;
@@ -393,7 +394,7 @@ extern "C" void run_get_block(
 	const dim3 num_threads,
 	const dim3 num_blocks)
 {
-	get_block<<<num_blocks,num_threads>>>(
+	hipLaunchKernelGGL(get_block, dim3(num_blocks), dim3(num_threads), 0, 0, 
 		start_point,
 		image,
 		stacks,
@@ -417,7 +418,7 @@ extern "C" void run_hard_treshold_block(
 	const dim3 num_blocks,
 	const uint shared_memory_size)
 {
-	hard_treshold_block<<<num_blocks, num_threads, shared_memory_size>>>(
+	hipLaunchKernelGGL(hard_treshold_block, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0, 
 		start_point,
 		patch_stack,
 		w_P,
@@ -443,7 +444,7 @@ extern "C" void run_aggregate_block(
 	const dim3 num_threads,
 	const dim3 num_blocks)
 {
-	aggregate_block<<<num_blocks,num_threads>>>(
+	hipLaunchKernelGGL(aggregate_block, dim3(num_blocks), dim3(num_threads), 0, 0, 
 		start_point,
 		patch_stack,
 		w_P,
@@ -467,7 +468,7 @@ extern "C" void run_aggregate_final(
 	const dim3 num_blocks
 )
 {
-	aggregate_final<<<num_blocks,num_threads>>>(
+	hipLaunchKernelGGL(aggregate_final, dim3(num_blocks), dim3(num_threads), 0, 0, 
 		numerator,
 		denominator,
 		image_dim,
@@ -489,7 +490,7 @@ extern "C" void run_wiener_filtering(
 	const uint shared_memory_size
 )
 {
-	wiener_filtering<<<num_blocks,num_threads,shared_memory_size>>>(
+	hipLaunchKernelGGL(wiener_filtering, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0, 
 		start_point,
 		patch_stack,
 		patch_stack_basic,

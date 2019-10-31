@@ -1,6 +1,8 @@
 #ifndef _PARAMS_HPP_
 #define _PARAMS_HPP_
 
+#define hipWarpSize 64
+
 struct Params
 {
 	/*

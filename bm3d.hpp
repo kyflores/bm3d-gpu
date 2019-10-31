@@ -1,14 +1,15 @@
+#pragma once
 #define NOMINMAX
 #include "params.hpp"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
+#include <hip/hip_runtime.h>
+// #include <device_launch_parameters.h>
 
 #include <algorithm> //min  max
 #include <vector>
-#include <vector_types.h>
-#include <vector_functions.h>
+#include <hip/hip_vector_types.h>
+#include <hip/hip_common.h>
+// #include <vector_functions.h>
 #include <math.h>
 
 #include "indices.cuh"
@@ -17,8 +18,8 @@
 #define KER2_BLOCK_WIDTH          128
 
 //Exception handling
-#include <thrust/system_error.h>
-#include <thrust/system/cuda/error.h>
+// #include <thrust/system_error.h>
+// #include <thrust/system/cuda/error.h>
 #include <sstream>
 #include <stdexcept>
 
@@ -127,15 +128,15 @@ extern "C" void run_wiener_filtering(
 //Cuda error handling
 //Sometimes does not work
 #define cuda_error_check(ans) { throw_on_cuda_error((ans),__FILE__, __LINE__); }
-void throw_on_cuda_error(cudaError_t code, const char *file, int line)
+void throw_on_cuda_error(hipError_t code, const char *file, int line)
 {
-	if(code != cudaSuccess)
+	if(code != hipSuccess)
 	{
 		std::stringstream ss;
-		ss << file << "(" << line << "): " << cudaGetErrorString(code);
+		ss << file << "(" << line << "): " << hipGetErrorString(code);
 		std::string file_and_line;
 		ss >> file_and_line;
-		throw thrust::system_error(code, thrust::cuda_category(), file_and_line);
+		throw;
 	}
 }
 
@@ -169,7 +170,7 @@ private:
 	Params h_wien_params;
 
 	//Device properties
-	cudaDeviceProp properties;
+	hipDeviceProp_t properties;
 
 	bool _verbose;
 	
@@ -179,18 +180,18 @@ private:
 		int maxk = std::max(h_wien_params.k,h_hard_params.k);
 		int maxN = std::max(h_wien_params.N,h_hard_params.N);
 
-		cuda_error_check( cudaMalloc((void**)&d_stacks, sizeof(ushort) * h_batch_size.x * h_batch_size.y * maxN) );
+		cuda_error_check( hipMalloc((void**)&d_stacks, sizeof(ushort) * h_batch_size.x * h_batch_size.y * maxN) );
 
-		cuda_error_check( cudaMalloc((void**)&d_num_patches_in_stack, sizeof(uint) * h_batch_size.x * h_batch_size.y ) );
+		cuda_error_check( hipMalloc((void**)&d_num_patches_in_stack, sizeof(uint) * h_batch_size.x * h_batch_size.y ) );
 
-		cuda_error_check( cudaMalloc((void**)&d_gathered_stacks, sizeof(float)*(maxN+1)*maxk*maxk*h_batch_size.x*h_batch_size.y) );
+		cuda_error_check( hipMalloc((void**)&d_gathered_stacks, sizeof(float)*(maxN+1)*maxk*maxk*h_batch_size.x*h_batch_size.y) );
 		
-		cuda_error_check( cudaMalloc((void**)&d_w_P, sizeof(float) * h_batch_size.x*h_batch_size.y) );
+		cuda_error_check( hipMalloc((void**)&d_w_P, sizeof(float) * h_batch_size.x*h_batch_size.y) );
 		
-		cuda_error_check( cudaMalloc((void**)&d_kaiser_window, sizeof(float) * maxk * maxk) );
+		cuda_error_check( hipMalloc((void**)&d_kaiser_window, sizeof(float) * maxk * maxk) );
 
 		if (h_reserved_two_step)
-			cuda_error_check( cudaMalloc((void**)&d_gathered_stacks_basic, sizeof(float)*(maxN+1)*maxk*maxk*h_batch_size.x*h_batch_size.y) );
+			cuda_error_check( hipMalloc((void**)&d_gathered_stacks_basic, sizeof(float)*(maxN+1)*maxk*maxk*h_batch_size.x*h_batch_size.y) );
 	}
 
 	//Allocate device buffers dependent on image dimensions
@@ -203,19 +204,19 @@ private:
 
 		int size = width * height;
 		for(auto & it : d_noisy_image) {
-			cuda_error_check( cudaMalloc((void**)&it, sizeof(uchar) * size) );
+			cuda_error_check( hipMalloc((void**)&it, sizeof(uchar) * size) );
 		}
 
 		for(auto & it : d_denoised_image) {
-			cuda_error_check( cudaMalloc((void**)&it, sizeof(uchar) * size) );
+			cuda_error_check( hipMalloc((void**)&it, sizeof(uchar) * size) );
 		}
 
 		for(auto & it : d_numerator) {
-			cuda_error_check( cudaMalloc((void**)&it, sizeof(float) * size) );
+			cuda_error_check( hipMalloc((void**)&it, sizeof(float) * size) );
 		}
 
 		for(auto & it : d_denominator) {
-			cuda_error_check( cudaMalloc((void**)&it, sizeof(float) * size) );
+			cuda_error_check( hipMalloc((void**)&it, sizeof(float) * size) );
 		}
 
 	}
@@ -245,7 +246,7 @@ private:
 		        for (unsigned i = 0; i < k * k; i++)
             			kaiserWindow[i] = 1.0f;
 
-		cuda_error_check( cudaMemcpy(d_kaiser_window,&kaiserWindow[0],k*k*sizeof(float),cudaMemcpyHostToDevice));
+		cuda_error_check( hipMemcpy(d_kaiser_window,&kaiserWindow[0],k*k*sizeof(float),hipMemcpyHostToDevice));
 	}
 	
 	//Copy image to device
@@ -254,7 +255,7 @@ private:
 		size_t image_size = width * height;
 		for(int i = 0; i < channels; ++i) {
 			//Copy image to device
-			cuda_error_check( cudaMemcpy(d_noisy_image[i],src_image+i*image_size,image_size*sizeof(uchar),cudaMemcpyHostToDevice));
+			cuda_error_check( hipMemcpy(d_noisy_image[i],src_image+i*image_size,image_size*sizeof(uchar),hipMemcpyHostToDevice));
 		}
 	}
 	
@@ -367,8 +368,8 @@ private:
 					s_size_bm					// CUDA: Shared memory size
 				);
 
-				cuda_error_check( cudaGetLastError() );
-				cuda_error_check( cudaDeviceSynchronize() );
+				cuda_error_check( hipGetLastError() );
+				cuda_error_check( hipDeviceSynchronize() );
 
 				if (_verbose)
 					time_blockmatching.stop();				
@@ -392,8 +393,8 @@ private:
 						num_blocks					//CUDA: Blocks in grid
 					);
 			
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 					
 					if (_verbose)
 					{
@@ -403,8 +404,8 @@ private:
 					
 					//Apply the 2D DCT transform to each layer of 3D group
 					run_DCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 
 
 					if (_verbose)
@@ -434,8 +435,8 @@ private:
 						s_size_t				//CUDA: Shared memory size
 					);
 					
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 					
 					if (_verbose)
 					{
@@ -446,8 +447,8 @@ private:
 					//Apply inverse 2D DCT transform to each layer of 3D group
 					run_IDCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
 					
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 					
 					if (_verbose)
 					{
@@ -471,8 +472,8 @@ private:
 						num_threads,				//CUDA: Threads in block
 						num_blocks					//CUDA: Blocks in grid
 					);
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 			
 			
 					if (_verbose)
@@ -492,8 +493,8 @@ private:
 				num_threads_f,					//CUDA: Threads in block
 				num_blocks_f 					//CUDA: Blocks in grid
 			);
-			cuda_error_check( cudaGetLastError() );
-			cuda_error_check( cudaDeviceSynchronize() );
+			cuda_error_check( hipGetLastError() );
+			cuda_error_check( hipDeviceSynchronize() );
 		}
 
 		if(_verbose)
@@ -584,8 +585,8 @@ private:
 					num_blocks_bm,			// CUDA: Blocks in grid
 					s_size_bm				// CUDA: Shared memory size
 				);
-				cuda_error_check( cudaGetLastError() );
-				cuda_error_check( cudaDeviceSynchronize() );
+				cuda_error_check( hipGetLastError() );
+				cuda_error_check( hipDeviceSynchronize() );
 
 
 				if (_verbose)
@@ -610,8 +611,8 @@ private:
 						num_blocks					//CUDA: Blocks in grid
 					);
 					
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 					
 					//Get patches from noisy image to 3D auxiliary array according to the addresess form block-matching
 					run_get_block(
@@ -627,8 +628,8 @@ private:
 						num_blocks					//CUDA: Blocks in grid
 					);
 				
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 
 				
 					if (_verbose)
@@ -639,13 +640,13 @@ private:
 		
 					//Apply 2D DCT transform to each layer of 3D group that contains noisy patches
 					run_DCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 					
 					//Apply 2D DCT transform to each layer of 3D group that contains patches from basic image estimate
 					run_DCT2D8x8(d_gathered_stacks_basic, d_gathered_stacks_basic, trans_size, num_threads_tr, num_blocks_tr);
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 		
 					
 					if (_verbose)
@@ -675,8 +676,8 @@ private:
 						s_size_t					//CUDA: Shared memory size
 					);
 
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 
 				
 					if (_verbose)
@@ -688,8 +689,8 @@ private:
 					//Apply 2D IDCT transform to each layer of 3D group that contains filtered patches
 					run_IDCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
 					
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 					
 				
 					if (_verbose)
@@ -715,8 +716,8 @@ private:
 						num_threads,			//CUDA: Threads in block
 						num_blocks				//CUDA: Blocks in grid
 					);			
-					cuda_error_check( cudaGetLastError() );
-					cuda_error_check( cudaDeviceSynchronize() );
+					cuda_error_check( hipGetLastError() );
+					cuda_error_check( hipDeviceSynchronize() );
 				
 				
 					if (_verbose)
@@ -735,8 +736,8 @@ private:
 				num_threads_f,
 				num_blocks_f 
 			);
-			cuda_error_check( cudaGetLastError() );
-			cuda_error_check( cudaDeviceSynchronize() );
+			cuda_error_check( hipGetLastError() );
+			cuda_error_check( hipDeviceSynchronize() );
 		}
 
 		if(_verbose)
@@ -758,44 +759,44 @@ private:
 		size_t image_size = width * height;
 		for (int channel = 0; channel < channels; ++channel)
 		{
-			cuda_error_check( cudaMemcpy(
+			cuda_error_check( hipMemcpy(
 						dst_image+channel*image_size,		// Destination
 						d_denoised_image[channel],			// Source
 						image_size*sizeof(uchar),			// Size
-						cudaMemcpyDeviceToHost) );			// Copy direction
+						hipMemcpyDeviceToHost) );			// Copy direction
 		}
 	}
 
 	//Free all buffers allocated on device that are dependent on 'denoising parameters'.
 	void free_device_auxiliary_arrays()
 	{
-		cuda_error_check( cudaFree(d_stacks) );
-		cuda_error_check( cudaFree(d_num_patches_in_stack) );
+		cuda_error_check( hipFree(d_stacks) );
+		cuda_error_check( hipFree(d_num_patches_in_stack) );
 
-		cuda_error_check( cudaFree(d_gathered_stacks));
-		cuda_error_check( cudaFree(d_w_P));
+		cuda_error_check( hipFree(d_gathered_stacks));
+		cuda_error_check( hipFree(d_w_P));
 
-		cuda_error_check( cudaFree(d_kaiser_window));
+		cuda_error_check( hipFree(d_kaiser_window));
 
 		if (h_reserved_two_step)
-			cuda_error_check( cudaFree(d_gathered_stacks_basic));
+			cuda_error_check( hipFree(d_gathered_stacks_basic));
 	}
 
 	//Free all buffers allocated on device that are dependent on image dimensions
 	void free_device_image()
 	{
 		for (auto & it : d_noisy_image)
-			cuda_error_check( cudaFree(it) );
+			cuda_error_check( hipFree(it) );
 		d_noisy_image.clear();
 		for (auto & it : d_denoised_image)
-			cuda_error_check( cudaFree(it) );
+			cuda_error_check( hipFree(it) );
 		d_denoised_image.clear();
 		for(auto & it : d_numerator) {
-			cuda_error_check( cudaFree(it) );
+			cuda_error_check( hipFree(it) );
 		}
 		d_numerator.clear();
 		for(auto & it : d_denominator) {
-			cuda_error_check( cudaFree(it) );
+			cuda_error_check( hipFree(it) );
 		}
 		d_denominator.clear();
 	}
@@ -805,10 +806,10 @@ private:
 	{
 		int size = width * height;
 		for(auto & it : d_numerator) {
-			cuda_error_check( cudaMemset(it, 0, size * sizeof(float)) );
+			cuda_error_check( hipMemset(it, 0, size * sizeof(float)) );
 		}
 		for(auto & it : d_denominator) {
-			cuda_error_check( cudaMemset(it, 0, size * sizeof(float)) );
+			cuda_error_check( hipMemset(it, 0, size * sizeof(float)) );
 		}
 	}
 	
@@ -820,8 +821,8 @@ public:
 		h_reserved_width(0), h_reserved_height(0), h_reserved_channels(0), h_reserved_two_step(0), d_kaiser_window(0), _verbose(false)
 	{
 		int device;
-		cuda_error_check( cudaGetDevice(&device) );
-		cuda_error_check( cudaGetDeviceProperties(&properties,device) );
+		cuda_error_check( hipGetDevice(&device) );
+		cuda_error_check( hipGetDeviceProperties(&properties,device) );
 
 		h_batch_size = make_uint2(256,128);
 	}
@@ -832,8 +833,8 @@ public:
 		h_reserved_width(0), h_reserved_height(0), h_reserved_channels(0), h_reserved_two_step(0), d_kaiser_window(0), _verbose(false)
 	{
 		int device;
-		cuda_error_check( cudaGetDevice(&device) );
-		cuda_error_check( cudaGetDeviceProperties(&properties,device) );
+		cuda_error_check( hipGetDevice(&device) );
+		cuda_error_check( hipGetDeviceProperties(&properties,device) );
 
 		h_batch_size = make_uint2(256,128);
 		
