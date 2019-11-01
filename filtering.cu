@@ -3,7 +3,6 @@
 #include "params.hpp"
 
 #include <hip/hip_runtime.h>
-#include <hip/hip_runtime.h>
 // #include <device_launch_parameters.h>
 #include <stdio.h>
 
@@ -13,7 +12,7 @@
 
 //Sum the passed values in a warp to the first thread of this warp.
 template<typename T>
-__device__ inline T warpReduceSum(T val) 
+__device__ inline T warpReduceSum(T val)
 {
   for (int offset = hipWarpSize/2; offset > 0; offset /= 2)
     val += __shfl_down(val,offset);
@@ -23,7 +22,7 @@ __device__ inline T warpReduceSum(T val)
 
 //Sum the passed values in a block to the first thread of a block.
 template<typename T>
-__inline__ __device__ float blockReduceSum(T* shared, T val, int tid, int tcount) 
+__inline__ __device__ float blockReduceSum(T* shared, T val, int tid, int tcount)
 {
   int lane = tid % hipWarpSize;
   int wid = tid / hipWarpSize;
@@ -95,7 +94,7 @@ __device__ inline void get_block_addresses(
 {
 	//One block handles one patch_stack, data are in array one after one.
 	start_idx = patch_stack_size * idx2(blockIdx.x,blockIdx.y,gridDim.x);
-	
+
 	outer_address.x = start_point.x + (blockIdx.x * params.p);
 	outer_address.y = start_point.y + (blockIdx.y * params.p);
 
@@ -123,31 +122,32 @@ void get_block(
 		const uint2 stacks_dim,					//IN: dimensions limiting addresses of reference patches
 		const Params params) 					//IN: denoising parameters
 {
-	
-	
 	uint startidx;
 	uint2 outer_address;
 	get_block_addresses(start_point,  params.k*params.k*(params.N+1), stacks_dim, params, outer_address, startidx);
 
 	if (outer_address.x >= stacks_dim.x || outer_address.y >= stacks_dim.y) return;
-	
+
 	patch_stack += startidx;
-	
+
 	const ushort* z_ptr = &stacks[ idx3(0, blockIdx.x, blockIdx.y, params.N,  gridDim.x) ];
 
 	uint num_patches = g_num_patches_in_stack[ idx2(blockIdx.x, blockIdx.y, gridDim.x) ];
-	
-	patch_stack[ idx3(threadIdx.x, threadIdx.y, 0, params.k, params.k) ] = (float)(image[ idx2(outer_address.x+threadIdx.x, outer_address.y+threadIdx.y, image_dim.x)]);
+
+	patch_stack[ idx3(threadIdx.x, threadIdx.y, 0, params.k, params.k) ] =
+		(float)(image[ idx2(outer_address.x+threadIdx.x, outer_address.y+threadIdx.y, image_dim.x)]);
+
 	for(uint i = 0; i < num_patches; ++i)
 	{
 		int x = (int)((signed char)(z_ptr[i] & 0xFF));
 		int y = (int)((signed char)((z_ptr[i] >> 8) & 0xFF));
-		patch_stack[ idx3(threadIdx.x, threadIdx.y, i+1, params.k, params.k) ] = (float)(image[ idx2(outer_address.x+x+threadIdx.x, outer_address.y+y+threadIdx.y, image_dim.x)]);
+		float tmp = (float)(image[ idx2(outer_address.x+x+threadIdx.x, outer_address.y+y+threadIdx.y, image_dim.x)]);
+		patch_stack[ idx3(threadIdx.x, threadIdx.y, i+1, params.k, params.k) ] = tmp;
 	}
 }
 
 /*
-1) Do the Walsh-Hadamard 1D transform on the z axis of 3D stack. 
+1) Do the Walsh-Hadamard 1D transform on the z axis of 3D stack.
 2) Treshold every pixel and count the number of non-zero coefficients
 3) Do the inverse Walsh-Hadamard 1D transform on the z axis of 3D stack.
 Used parameters: L3D,N,k,p
@@ -164,7 +164,7 @@ void hard_treshold_block(
 	const uint sigma				//IN: noise variance
 )
 {
-	HIP_DYNAMIC_SHARED( float, data)  
+	HIP_DYNAMIC_SHARED( float, data)
 
 	int paramN = params.N+1;
 	uint tcount = blockDim.x*blockDim.y;
@@ -174,20 +174,20 @@ void hard_treshold_block(
 	uint startidx;
 	uint2 outer_address;
 	get_block_addresses(start_point, patch_stack_size, stacks_dim, params, outer_address, startidx);
-	
+
 	if (outer_address.x >= stacks_dim.x || outer_address.y >= stacks_dim.y) return;
 
 	uint num_patches = g_num_patches_in_stack[ idx2(blockIdx.x, blockIdx.y, gridDim.x) ]+1; //+1 for the reference patch.
 	float* s_patch_stack = data + (tid * (num_patches+1)); //+1 for avoiding bank conflicts //TODO:sometimes
 	patch_stack = patch_stack + startidx + tid;
-		
+
 	//Load to the shared memory
 	for(uint i = 0; i < num_patches; ++i)
-		s_patch_stack[i] = patch_stack[ i*tcount ];	
+		s_patch_stack[i] = patch_stack[ i*tcount ];
 
 	//1D Transform
 	fwht(s_patch_stack, num_patches);
-	
+
 	//Hard-thresholding + counting of nonzero coefficients
 	uint nonzero = 0;
 	float threshold = params.L3D * sqrtf((float)(num_patches * sigma));
@@ -197,25 +197,25 @@ void hard_treshold_block(
 		{
 			s_patch_stack[ i ] = 0.0f;
 		}
-		else 
+		else
 			++nonzero;
 	}
-	
+
 	//Inverse 1D Transform
 	fwht(s_patch_stack, num_patches);
-	
+
 	//Normalize and save to global memory
 	for (uint i = 0; i < num_patches; ++i)
 	{
 		patch_stack[ i*tcount ] = s_patch_stack[i] / num_patches;
 	}
-	
+
 	//Reuse the shared memory for 32 partial sums
 	__syncthreads();
 	uint* shared = (uint*)data;
 	//Sum the number of non-zero coefficients for a 3D group
 	nonzero = blockReduceSum<uint>(shared, nonzero, tid, tcount);
-	
+
 	//Save the weight of a 3D group (1/nonzero coefficients)
 	if (tid == 0)
 	{
@@ -243,11 +243,11 @@ void aggregate_block(
 	const uint2 stacks_dim,				//IN: dimensions limiting addresses of reference patches
 	const Params params				//IN: denoising parameters
 )
-{		
+{
 	uint startidx;
 	uint2 outer_address;
 	get_block_addresses(start_point, params.k*params.k*(params.N+1), stacks_dim, params, outer_address, startidx);
-	
+
 	if (outer_address.x >= stacks_dim.x || outer_address.y >= stacks_dim.y) return;
 
 	patch_stack += startidx;
@@ -255,7 +255,7 @@ void aggregate_block(
 	uint num_patches = g_num_patches_in_stack[ idx2(blockIdx.x, blockIdx.y, gridDim.x) ]+1;
 
 	float wp = w_P[ idx2(blockIdx.x, blockIdx.y, gridDim.x ) ];
-	
+
 	const ushort* z_ptr = &stacks[ idx3(0, blockIdx.x, blockIdx.y, params.N,  gridDim.x) ];
 
 	float kaiser_value = kaiser_window[ idx2(threadIdx.x, threadIdx.y, params.k) ];
@@ -322,30 +322,30 @@ void wiener_filtering(
 	uint startidx;
 	uint2 outer_address;
 	get_block_addresses(start_point, patch_stack_size, stacks_dim, params, outer_address, startidx);
-	
+
 	if (outer_address.x >= stacks_dim.x || outer_address.y >= stacks_dim.y) return;
-		
+
 	uint num_patches = g_num_patches_in_stack[ idx2(blockIdx.x, blockIdx.y, gridDim.x) ]+1;
-	
+
 	float* s_patch_stack_basic = data + (tid * (num_patches+1)); //+1 for avoiding bank conflicts
 	float* s_patch_stack = s_patch_stack_basic + (tcount * (num_patches+1)); //+1 for avoiding bank conflicts
-	
+
 	patch_stack = patch_stack + startidx + tid;
 	patch_stack_basic = patch_stack_basic + startidx + tid;
-		
+
 	//Load to the shared memory
 	for(uint i = 0; i < num_patches; ++i)
 	{
 		s_patch_stack[i] = patch_stack[ i*tcount ];
 		s_patch_stack_basic[i] = patch_stack_basic[ i*tcount ];
 	}
-	
+
 	//1D Transforms
 	fwht(s_patch_stack, num_patches);
 	fwht(s_patch_stack_basic, num_patches);
 
 	float normcoeff = 1.0f/((float)num_patches);
-	
+
 	//Wiener filtering
 	float wien_sum = 0.0f;
 	for(int i = 0; i < num_patches; ++i)
@@ -355,16 +355,16 @@ void wiener_filtering(
 		s_patch_stack[i] *= wien * normcoeff;
 		wien_sum += wien*wien;
 	}
-	
+
 	//1D inverse transform
 	fwht(s_patch_stack, num_patches);
-	
+
 	//Save to global memory
 	for(uint i = 0; i < num_patches; ++i)
 	{
 		patch_stack[ i*tcount ] = s_patch_stack[i];
 	}
-	
+
 	__syncthreads();
 	//reuse of the shared memory for 32 partial sums
 	float* shared = (float*)data;
@@ -394,7 +394,7 @@ extern "C" void run_get_block(
 	const dim3 num_threads,
 	const dim3 num_blocks)
 {
-	hipLaunchKernelGGL(get_block, dim3(num_blocks), dim3(num_threads), 0, 0, 
+	hipLaunchKernelGGL(get_block, dim3(num_blocks), dim3(num_threads), 0, 0,
 		start_point,
 		image,
 		stacks,
@@ -418,7 +418,7 @@ extern "C" void run_hard_treshold_block(
 	const dim3 num_blocks,
 	const uint shared_memory_size)
 {
-	hipLaunchKernelGGL(hard_treshold_block, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0, 
+	hipLaunchKernelGGL(hard_treshold_block, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0,
 		start_point,
 		patch_stack,
 		w_P,
@@ -431,7 +431,7 @@ extern "C" void run_hard_treshold_block(
 
 extern "C" void run_aggregate_block(
 	const uint2 start_point,
-	const float* __restrict patch_stack,	
+	const float* __restrict patch_stack,
 	const float* __restrict w_P,
 	const ushort* __restrict stacks,
 	const float* __restrict kaiser_window,
@@ -444,7 +444,7 @@ extern "C" void run_aggregate_block(
 	const dim3 num_threads,
 	const dim3 num_blocks)
 {
-	hipLaunchKernelGGL(aggregate_block, dim3(num_blocks), dim3(num_threads), 0, 0, 
+	hipLaunchKernelGGL(aggregate_block, dim3(num_blocks), dim3(num_threads), 0, 0,
 		start_point,
 		patch_stack,
 		w_P,
@@ -468,12 +468,12 @@ extern "C" void run_aggregate_final(
 	const dim3 num_blocks
 )
 {
-	hipLaunchKernelGGL(aggregate_final, dim3(num_blocks), dim3(num_threads), 0, 0, 
+	hipLaunchKernelGGL(aggregate_final, dim3(num_blocks), dim3(num_threads), 0, 0,
 		numerator,
 		denominator,
 		image_dim,
 		denoised_image
-	);	
+	);
 }
 
 extern "C" void run_wiener_filtering(
@@ -490,7 +490,7 @@ extern "C" void run_wiener_filtering(
 	const uint shared_memory_size
 )
 {
-	hipLaunchKernelGGL(wiener_filtering, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0, 
+	hipLaunchKernelGGL(wiener_filtering, dim3(num_blocks), dim3(num_threads), shared_memory_size, 0,
 		start_point,
 		patch_stack,
 		patch_stack_basic,

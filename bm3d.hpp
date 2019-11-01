@@ -88,7 +88,7 @@ extern "C" void run_IDCT2D8x8(
 
 extern "C" void run_aggregate_block(
 	const uint2 start_point,
-	const float* __restrict patch_stack,	
+	const float* __restrict patch_stack,
 	const float* __restrict w_P,
 	const ushort* __restrict stacks,
 	const float* __restrict kaiser_window,
@@ -136,7 +136,7 @@ void throw_on_cuda_error(hipError_t code, const char *file, int line)
 		ss << file << "(" << line << "): " << hipGetErrorString(code);
 		std::string file_and_line;
 		ss >> file_and_line;
-		throw;
+		throw std::string(file_and_line);
 	}
 }
 
@@ -146,7 +146,7 @@ private:
 	//Image (vector of image channels)
 	std::vector<uchar*> d_noisy_image;
 	std::vector<uchar*> d_denoised_image;
-	
+
 	//Auxiliary arrays
 	ushort* d_stacks;					//Addresses of similar patches to each reference patch of a batch
 	std::vector<float*> d_numerator;	//Numerator used for aggregation
@@ -173,7 +173,7 @@ private:
 	hipDeviceProp_t properties;
 
 	bool _verbose;
-	
+
 	//Allocate device buffers dependent on denoising parameters
 	void allocate_device_auxiliary_arrays()
 	{
@@ -185,9 +185,9 @@ private:
 		cuda_error_check( hipMalloc((void**)&d_num_patches_in_stack, sizeof(uint) * h_batch_size.x * h_batch_size.y ) );
 
 		cuda_error_check( hipMalloc((void**)&d_gathered_stacks, sizeof(float)*(maxN+1)*maxk*maxk*h_batch_size.x*h_batch_size.y) );
-		
+
 		cuda_error_check( hipMalloc((void**)&d_w_P, sizeof(float) * h_batch_size.x*h_batch_size.y) );
-		
+
 		cuda_error_check( hipMalloc((void**)&d_kaiser_window, sizeof(float) * maxk * maxk) );
 
 		if (h_reserved_two_step)
@@ -241,14 +241,14 @@ private:
 			for (unsigned i = k / 2; i < k; i++)
 				for (unsigned j = 0; j < k; j++)
 					kaiserWindow[i + k * j] = kaiserWindow[k - i - 1 + k * j];
-		} 
+		}
 		else
 		        for (unsigned i = 0; i < k * k; i++)
             			kaiserWindow[i] = 1.0f;
 
 		cuda_error_check( hipMemcpy(d_kaiser_window,&kaiserWindow[0],k*k*sizeof(float),hipMemcpyHostToDevice));
 	}
-	
+
 	//Copy image to device
 	void copy_device_image(const uchar * src_image, int width, int height, int channels)
 	{
@@ -258,7 +258,7 @@ private:
 			cuda_error_check( hipMemcpy(d_noisy_image[i],src_image+i*image_size,image_size*sizeof(uchar),hipMemcpyHostToDevice));
 		}
 	}
-	
+
 	//Compute launch parameters for block-matching kernel
 	void get_BM_launch_parameters(
 		const Params & params, 	//IN: Denoising parameters
@@ -266,7 +266,7 @@ private:
 		dim3 & num_blocks,		//OUT: numbe of blocks
 		uint & s_mem_size)		//OUT: shared memory size
 	{
-		//Determine number of warps form block-matching according to the size of shared memory. 
+		//Determine number of warps form block-matching according to the size of shared memory.
 		const uint p_block_width = ((properties.warpSize-1) * params.p) + params.k;
 		const uint s_image_p_size = p_block_width * params.k * sizeof(uchar);
 
@@ -279,9 +279,9 @@ private:
 		const uint s_patch_stacks_size = params.N * properties.warpSize * sizeof(uint);
 
 		const uint num_warps = std::min(shared_mem_avaliable / (s_diff_size + s_patches_in_stack_size + s_patch_stacks_size),32u);
-		
+
 		//Block-matching Launch parameters
-		s_mem_size = ((s_diff_size + s_patches_in_stack_size + s_patch_stacks_size) * num_warps) + s_image_p_size;		
+		s_mem_size = ((s_diff_size + s_patches_in_stack_size + s_patch_stacks_size) * num_warps) + s_image_p_size;
 		num_threads = dim3(properties.warpSize*num_warps, 1);
 		num_blocks = dim3(h_batch_size.x / properties.warpSize, h_batch_size.y);
 
@@ -296,7 +296,7 @@ private:
 	Launch first step of BM3D. It produces basic estimate in denoised_image arrays.
 	*/
 	void first_step(std::vector<uchar*> & denoised_image, int width, int height, int channels, uint* sigma)
-	{	
+	{
 		//image dimensions
 		const uint2 image_dim = make_uint2(width,height);
 
@@ -310,7 +310,7 @@ private:
 		dim3 num_blocks_bm;
 		uint s_size_bm;
 		get_BM_launch_parameters(h_hard_params, num_threads_bm, num_blocks_bm, s_size_bm);
-		
+
 		//Determine launch parameteres for get and aggregate kernels
 		const dim3 num_threads(h_hard_params.k, h_hard_params.k);
 		const dim3 num_blocks(h_batch_size.x, h_batch_size.y);
@@ -326,10 +326,10 @@ private:
 		//Determine launch parameteres for final division kernel
 		const dim3 num_threads_f(128, 4);
 		const dim3 num_blocks_f((width + num_threads_f.x - 1) / num_threads_f.x, (height + num_threads_f.y - 1) / num_threads_f.y);
-		
+
 		//Create and copy to device kaiser window
 		prepare_kaiser_window(h_hard_params.k);
-		
+
 		//Timers
 		Stopwatch time_blockmatching;
 		Stopwatch time_get;
@@ -337,9 +337,9 @@ private:
 		Stopwatch time_itransform;
 		Stopwatch time_aggregate;
 		Stopwatch time_treshold;
-		
-		
-		//Batch processing: in each iteration only the batch_size reference patches are processed. 
+
+
+		//Batch processing: in each iteration only the batch_size reference patches are processed.
 		uint2 start_point;
 		for(start_point.y = 0; start_point.y < stacks_dim.y + h_hard_params.p - 1; start_point.y+=(h_batch_size.y*h_hard_params.p))
 		{
@@ -353,17 +353,17 @@ private:
 			{
 				if (_verbose)
 					time_blockmatching.start();
-				
+
 				//Finds similar patches for each reference patch of a batch and stores them in d_stacks array
 				run_block_matching(
-					d_noisy_image[0],			// IN: Image	
+					d_noisy_image[0],			// IN: Image
 					d_stacks,					// OUT: Array of adresses of similar patches
 					d_num_patches_in_stack,		// OUT: Array containing numbers of these addresses
 					image_dim,					// IN: Image dimensions
 					stacks_dim,					// IN: Dimensions limiting addresses of reference patches
-					h_hard_params,				// IN: Denoising parameters 
+					h_hard_params,				// IN: Denoising parameters
 					start_point,				// IN: Address of the top-left reference patch of a batch
-					num_threads_bm,				// CUDA: Threads in block 
+					num_threads_bm,				// CUDA: Threads in block
 					num_blocks_bm,				// CUDA: Blocks in grid
 					s_size_bm					// CUDA: Shared memory size
 				);
@@ -372,7 +372,7 @@ private:
 				cuda_error_check( hipDeviceSynchronize() );
 
 				if (_verbose)
-					time_blockmatching.stop();				
+					time_blockmatching.stop();
 
 				for (int channel = 0; channel < channels; ++channel)
 				{
@@ -392,16 +392,16 @@ private:
 						num_threads,				//CUDA: Threads in block
 						num_blocks					//CUDA: Blocks in grid
 					);
-			
+
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-					
+
 					if (_verbose)
 					{
 						time_get.stop();
 						time_transform.start();
 					}
-					
+
 					//Apply the 2D DCT transform to each layer of 3D group
 					run_DCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
 					cuda_error_check( hipGetLastError() );
@@ -414,14 +414,14 @@ private:
 						time_treshold.start();
 					}
 
-					
+
 					/*
 					1) 1D Walsh-Hadamard transform of proper size on the 3rd dimension of each 3D group of a batch to complete the 3D transform.
 					2) Hard thresholding
 					3) Inverse 1D Walsh-Hadamard trannsform.
 					4) Compute the weingt of each 3D group
 					*/
-					
+
 					run_hard_treshold_block(
 						start_point,			//IN: First reference patch of a batch
 						d_gathered_stacks,	//IN/OUT: 3D groups with thransfomed patches
@@ -434,28 +434,28 @@ private:
 						num_blocks,				//CUDA: Blocks in grid
 						s_size_t				//CUDA: Shared memory size
 					);
-					
+
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-					
+
 					if (_verbose)
 					{
 						time_treshold.stop();
 						time_itransform.start();
 					}
-					
+
 					//Apply inverse 2D DCT transform to each layer of 3D group
 					run_IDCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
-					
+
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-					
+
 					if (_verbose)
 					{
 						time_itransform.stop();
 						time_aggregate.start();
 					}
-				
+
 					//Aggregates filtered patches of all 3D groups of a batch into numerator and denominator buffers
 					run_aggregate_block(
 						start_point,				//IN: First reference patch of a batch
@@ -474,13 +474,13 @@ private:
 					);
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-			
-			
+
+
 					if (_verbose)
 						time_aggregate.stop();
 				}
-			}	
-		}	
+			}
+		}
 
 		//Divide numerator by denominator and save resullt to output image
 		for (int channel = 0; channel < channels; ++channel)
@@ -512,7 +512,7 @@ private:
 	}
 
 	void second_step(std::vector<uchar*> & denoised_image, int width, int height, int channels, uint* sigma)
-	{	
+	{
 		//Image dimensions
 		const uint2 image_dim = make_uint2(width,height);
 
@@ -526,14 +526,14 @@ private:
 		dim3 num_blocks_bm;
 		uint s_size_bm;
 		get_BM_launch_parameters(h_wien_params, num_threads_bm, num_blocks_bm, s_size_bm);
-		
+
 		//Determine launch parameteres for get and aggregate kernels
 		const dim3 num_threads(h_wien_params.k, h_wien_params.k);
 		const dim3 num_blocks(h_batch_size.x, h_batch_size.y);
-		
+
 		//Determine launch parameteres for DCT kernel
 		const uint trans_size = h_wien_params.k*h_wien_params.k*paramN1*h_batch_size.x*h_batch_size.y;
-		const dim3 num_blocks_tr((trans_size + (KER2_BLOCK_WIDTH*h_wien_params.k) - 1) / (KER2_BLOCK_WIDTH*h_wien_params.k), 1, 1); 
+		const dim3 num_blocks_tr((trans_size + (KER2_BLOCK_WIDTH*h_wien_params.k) - 1) / (KER2_BLOCK_WIDTH*h_wien_params.k), 1, 1);
 		const dim3 num_threads_tr(h_wien_params.k, KER2_BLOCK_WIDTH/h_wien_params.k, 1);
 
 		//Determine launch parameteres for filtering kernel
@@ -545,7 +545,7 @@ private:
 
 		//Create and copy to device kaiser window
 		prepare_kaiser_window(h_wien_params.k);
-		
+
 		//Timers
 		Stopwatch time_blockmatching;
 		Stopwatch time_get;
@@ -556,8 +556,8 @@ private:
 		Stopwatch time_aggregate;
 		Stopwatch time_wien;
 		Stopwatch time_times_wien;
-		
-		
+
+
 		uint2 start_point;
 
 		for(start_point.y = 0; start_point.y < stacks_dim.y + h_wien_params.p - 1; start_point.y+=(h_batch_size.y*h_wien_params.p))
@@ -574,14 +574,14 @@ private:
 					time_blockmatching.start();
 
 				run_block_matching(
-					d_denoised_image[0],	// IN: Image	
+					d_denoised_image[0],	// IN: Image
 					d_stacks,				// OUT: Array of adresses of similar patches
 					d_num_patches_in_stack,	// OUT: Number of blocks on each adress
 					image_dim,				// IN: Image dimensions
 					stacks_dim,				// IN: Image_m dimensions
-					h_wien_params,			// IN: Parameters 
+					h_wien_params,			// IN: Parameters
 					start_point,			// IN: Line to process
-					num_threads_bm,			// CUDA: Threads in block 
+					num_threads_bm,			// CUDA: Threads in block
 					num_blocks_bm,			// CUDA: Blocks in grid
 					s_size_bm				// CUDA: Shared memory size
 				);
@@ -596,7 +596,7 @@ private:
 				{
 					if (_verbose)
 						time_get.start();
-				
+
 					//Get patches from basic image estimate to 3D auxiliary array according to the addresess form block-matching
 					run_get_block(
 						start_point,				//IN: First reference patch of a batch
@@ -610,10 +610,10 @@ private:
 						num_threads,				//CUDA: Threads in block
 						num_blocks					//CUDA: Blocks in grid
 					);
-					
+
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-					
+
 					//Get patches from noisy image to 3D auxiliary array according to the addresess form block-matching
 					run_get_block(
 						start_point,				//IN: First reference patch of a batch
@@ -627,34 +627,34 @@ private:
 						num_threads,				//CUDA: Threads in block
 						num_blocks					//CUDA: Blocks in grid
 					);
-				
+
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
 
-				
+
 					if (_verbose)
 					{
 						time_get.stop();
 						time_transform.start();
 					}
-		
+
 					//Apply 2D DCT transform to each layer of 3D group that contains noisy patches
 					run_DCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-					
+
 					//Apply 2D DCT transform to each layer of 3D group that contains patches from basic image estimate
 					run_DCT2D8x8(d_gathered_stacks_basic, d_gathered_stacks_basic, trans_size, num_threads_tr, num_blocks_tr);
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-		
-					
+
+
 					if (_verbose)
 					{
 						time_transform.stop();
 						time_wien.start();
 					}
-		
+
 					/*
 					1) 1D Walsh-Hadamard transform of proper size on the 3rd dimension of each 3D noisy group (from noisy patches) and each 3D basic group (pathes from the basic image estimate)
 					2) Compute wiener coeficients from basic groups
@@ -679,20 +679,20 @@ private:
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
 
-				
+
 					if (_verbose)
 					{
 						time_wien.stop();
 						time_itransform.start();
 					}
-					
+
 					//Apply 2D IDCT transform to each layer of 3D group that contains filtered patches
 					run_IDCT2D8x8(d_gathered_stacks, d_gathered_stacks, trans_size, num_threads_tr, num_blocks_tr);
-					
+
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-					
-				
+
+
 					if (_verbose)
 					{
 						time_itransform.stop();
@@ -715,14 +715,14 @@ private:
 						h_wien_params,			//IN: Denoising parameters
 						num_threads,			//CUDA: Threads in block
 						num_blocks				//CUDA: Blocks in grid
-					);			
+					);
 					cuda_error_check( hipGetLastError() );
 					cuda_error_check( hipDeviceSynchronize() );
-				
-				
+
+
 					if (_verbose)
 						time_aggregate.stop();
-				}	
+				}
 			}
 		}
 		//Divide numerator by denominator and save resullt to output image
@@ -734,7 +734,7 @@ private:
 				image_dim,						//IN: Image dimensions
 				denoised_image[channel],		//OUT: Image estimate
 				num_threads_f,
-				num_blocks_f 
+				num_blocks_f
 			);
 			cuda_error_check( hipGetLastError() );
 			cuda_error_check( hipDeviceSynchronize() );
@@ -800,7 +800,7 @@ private:
 		}
 		d_denominator.clear();
 	}
-	
+
 	//Initialize necessary arrays for aggregation by value 0
 	void null_aggregation_buffers(int width, int height)
 	{
@@ -812,9 +812,9 @@ private:
 			cuda_error_check( hipMemset(it, 0, size * sizeof(float)) );
 		}
 	}
-	
+
 public:
-	BM3D() : 
+	BM3D() :
 		h_hard_params(),
 		h_wien_params(),
 		d_gathered_stacks(0), d_gathered_stacks_basic(0), d_w_P(0), d_stacks(0), d_num_patches_in_stack(0),
@@ -824,9 +824,13 @@ public:
 		cuda_error_check( hipGetDevice(&device) );
 		cuda_error_check( hipGetDeviceProperties(&properties,device) );
 
+		// OpenCL optimization guide notes that one kernel can't use more than 1/2 the total shared
+		// memory. Is that still true?
+		properties.sharedMemPerBlock /= 2;
+
 		h_batch_size = make_uint2(256,128);
 	}
-	BM3D(uint n, uint k, uint N, uint T, uint p, float L3D, bool seceon_step) : 
+	BM3D(uint n, uint k, uint N, uint T, uint p, float L3D, bool seceon_step) :
 		h_hard_params(n, k, N, T, p, L3D),
 		h_wien_params(n, k, N, T, p, L3D),
 		d_gathered_stacks(0), d_gathered_stacks_basic(0), d_w_P(0), d_stacks(0), d_num_patches_in_stack(0),
@@ -837,8 +841,8 @@ public:
 		cuda_error_check( hipGetDeviceProperties(&properties,device) );
 
 		h_batch_size = make_uint2(256,128);
-		
-		if (k != 8) 
+
+		if (k != 8)
 			throw std::invalid_argument("k has to be 8, other values not implemented yet.");
 	}
 
@@ -851,7 +855,7 @@ public:
 
 	/*
 	Source image is denoised unig BM3D algorithm
-	src_image and dst_image are arrays allocated in the host memory and the pixels are stored here by the channels. 
+	src_image and dst_image are arrays allocated in the host memory and the pixels are stored here by the channels.
 	First width*height pixels represent luma (Y) component and each following width*height pixels represent color components
 	*/
 	void denoise_host_image(uchar *src_image, uchar *dst_image, int width, int height, int channels, uint* sigma, bool two_step)
@@ -868,7 +872,7 @@ public:
 
 		Stopwatch p1;
 		p1.start();
-		
+
 		//Copying
 		copy_device_image(src_image, width, height, channels);
 
@@ -879,7 +883,7 @@ public:
 		p1.stop();
 		if (_verbose)
 			std::cout << "1st step took: " << p1.getSeconds() << std::endl;
-		
+
 		//2nd denoising step
 		if (two_step)
 		{
@@ -913,8 +917,8 @@ public:
 		}
 		else
 			h_hard_params = Params(n,k,N,T,p,L3D);
-		
-		if (k != 8) 
+
+		if (k != 8)
 			throw std::invalid_argument("k has to be 8, other values not implemented yet.");
 	}
 	void set_wien_params(uint n, uint k, uint N, uint T, uint p)
@@ -926,8 +930,8 @@ public:
 		}
 		else
 			h_wien_params = Params(n,k,N,T,p,0.0);
-		
-		if (k != 8) 
+
+		if (k != 8)
 			throw std::invalid_argument("k has to be 8, other values not implemented yet.");
 	}
 

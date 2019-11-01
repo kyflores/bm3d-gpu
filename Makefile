@@ -1,5 +1,5 @@
 CPP=/opt/rocm/hip/bin/hipcc
-CFLAGS= -Og --std=c++11 -g
+CFLAGS= -Og --std=c++11 -g -gline-tables-only
 CUFLAGS=
 LDFLAGS=
 LIBS=hiprtc png
